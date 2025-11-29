@@ -69,6 +69,31 @@ The codebase follows a modular, component-based architecture for maintainability
     ```
     Open `http://localhost:5173` in your browser.
 
+### Docker
+
+You can also run the application using Docker:
+
+1.  **Build the image**:
+    ```bash
+    docker build -t landmark-museum .
+    ```
+
+2.  **Run the container**:
+    Pass your environment variables at runtime:
+    ```bash
+    docker run -p 8080:80 \
+      -e VITE_GOOGLE_SEARCH_API_KEY=your_key \
+      -e VITE_GOOGLE_SEARCH_CX=your_cx \
+      landmark-museum
+    ```
+    Open `http://localhost:8080` in your browser.
+
+### Deployment (Coolify/VPS)
+
+If you are deploying to a VPS using **Coolify**:
+1.  **Keep Nginx**: The Dockerfile uses Nginx to serve the static files. This is required because Coolify's proxy handles routing *to* your container, but your container still needs a web server to serve the actual content.
+2.  **Environment Variables**: In Coolify, add your `VITE_GOOGLE_SEARCH_API_KEY` and `VITE_GOOGLE_SEARCH_CX` to the "Environment Variables" section of your resource. The container is configured to read these at runtime and inject them into the application.
+
 ## 🎮 Controls
 
 | Key | Action |

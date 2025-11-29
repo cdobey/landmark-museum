@@ -7,8 +7,11 @@ export class LandmarkService {
         
         this.cors_proxy = 'https://corsproxy.io/?';
         this.search_url = 'https://www.googleapis.com/customsearch/v1';
-        this.googleApiKey = import.meta.env.VITE_GOOGLE_SEARCH_API_KEY || "";
-        this.googleCx = import.meta.env.VITE_GOOGLE_SEARCH_CX || "";
+        
+        // Try to get keys from runtime config (window.env) first, then build-time env
+        const env = window.env || {};
+        this.googleApiKey = env.VITE_GOOGLE_SEARCH_API_KEY || import.meta.env.VITE_GOOGLE_SEARCH_API_KEY || "";
+        this.googleCx = env.VITE_GOOGLE_SEARCH_CX || import.meta.env.VITE_GOOGLE_SEARCH_CX || "";
     }
 
     setApiKey(key) {
