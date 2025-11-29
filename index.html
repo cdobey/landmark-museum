@@ -11,23 +11,45 @@
     <div id="blocker">
       <div id="instructions">
         <p style="font-size:36px">
-          Click to play
+          Landmark Museum
         </p>
         <p>
           Move: WASD<br/>
           Jump: SPACE<br/>
           Look: MOUSE
         </p>
+        
+        <div id="api-key-section">
+          <h3>OpenAI API Key</h3>
+          <p class="api-note">Required to fetch landmark information</p>
+          <div id="api-input-container">
+            <input type="password" id="api-key-input" placeholder="Enter your OpenAI API key..." />
+            <button id="validate-key-btn" class="normbutton">Validate</button>
+          </div>
+          <div id="api-status"></div>
+        </div>
+        
+        <button id="enter-museum-btn" class="enter-button" disabled>Enter Museum</button>
       </div>
     </div>
 
-    <div id="ui-container">
-        <div id="user_span1"></div>
-        <div id="input-area">
-            <label for="countryInput">Enter a Country: </label>
-            <input type="text" id="countryInput" />
-            <button id="countrySubmit" class="normbutton">Submit</button>
+    <!-- 3D Search Overlay -->
+    <div id="search-overlay">
+        <div id="search-overlay-content">
+            <button id="search-overlay-close">&times;</button>
+            <h2>Search for a Country</h2>
+            <p>Enter a country name to explore its famous landmarks</p>
+            <div id="search-overlay-input-area">
+                <input type="text" id="search-input-field" placeholder="e.g., France, Japan, Egypt..." />
+                <button id="search-overlay-submit" class="normbutton">Search</button>
+            </div>
         </div>
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading-indicator">
+        <div class="spinner"></div>
+        <p>Loading landmarks...</p>
     </div>
 
     <script type="module" src="/src/main.js"></script>
