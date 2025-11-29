@@ -88,6 +88,16 @@ You can also run the application using Docker:
     ```
     Open `http://localhost:8080` in your browser.
 
+**Or pull from GitHub Container Registry:**
+
+```bash
+docker pull ghcr.io/chris.dobey/landmark-museum:latest
+docker run -p 8080:80 \
+  -e VITE_GOOGLE_SEARCH_API_KEY=your_key \
+  -e VITE_GOOGLE_SEARCH_CX=your_cx \
+  ghcr.io/chris.dobey/landmark-museum:latest
+```
+
 ### Deployment (Coolify/VPS)
 
 If you are deploying to a VPS using **Coolify**:
