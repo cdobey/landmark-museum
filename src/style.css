@@ -1,0 +1,38 @@
+body {
+    margin: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#blocker {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    z-index: 10;
+}
+
+#instructions {
+    text-align: center;
+    cursor: pointer;
+}
+
+#ui-container {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    z-index: 15;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.normbutton {
+    padding: 5px 10px;
+    cursor: pointer;
+}

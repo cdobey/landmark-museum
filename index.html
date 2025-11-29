@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Landmark Museum</title>
+    <link rel="stylesheet" href="./src/style.css">
+  </head>
+  <body>
+    <div id="blocker">
+      <div id="instructions">
+        <p style="font-size:36px">
+          Click to play
+        </p>
+        <p>
+          Move: WASD<br/>
+          Jump: SPACE<br/>
+          Look: MOUSE
+        </p>
+      </div>
+    </div>
+
+    <div id="ui-container">
+        <div id="user_span1"></div>
+        <div id="input-area">
+            <label for="countryInput">Enter a Country: </label>
+            <input type="text" id="countryInput" />
+            <button id="countrySubmit" class="normbutton">Submit</button>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
