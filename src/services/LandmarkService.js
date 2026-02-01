@@ -5,7 +5,6 @@ export class LandmarkService {
         this.ai_model = "gpt-5-nano-2025-08-07";
         this.apikey = ""; // Will be set from UI
         
-        this.cors_proxy = 'https://corsproxy.io/?';
         this.search_url = 'https://www.googleapis.com/customsearch/v1';
         
         // Try to get keys from runtime config (window.env) first, then build-time env
@@ -109,7 +108,7 @@ export class LandmarkService {
                 const response = await fetch(url);
                 const data = await response.json();
                 if (data.items && data.items.length > 0) {
-                    return this.cors_proxy + data.items[0].link;
+                    return data.items[0].link;
                 }
             } catch (error) {
                 console.error("Error fetching image", error);
