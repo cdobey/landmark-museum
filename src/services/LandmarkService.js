@@ -2,15 +2,22 @@ export class LandmarkService {
     constructor() {
         // API Configuration
         this.openaiURL = "https://api.openai.com/v1/chat/completions";
-        this.ai_model = "gpt-5-nano-2025-08-07";
+        // Fastest/cheapest general-purpose OpenAI model (good enough for short blurbs).
+        // Use the alias (not a snapshot) so performance improvements apply automatically.
+        this.ai_model = "gpt-5-nano";
         this.apikey = ""; // Will be set from UI
-        
-        this.search_url = 'https://www.googleapis.com/customsearch/v1';
-        
-        // Try to get keys from runtime config (window.env) first, then build-time env
-        const env = window.env || {};
-        this.googleApiKey = env.VITE_GOOGLE_SEARCH_API_KEY || import.meta.env.VITE_GOOGLE_SEARCH_API_KEY || "";
-        this.googleCx = env.VITE_GOOGLE_SEARCH_CX || import.meta.env.VITE_GOOGLE_SEARCH_CX || "";
+
+        // Speed + reliability knobs
+        this.aiTimeoutMs = 15000;
+        this.maxCompletionTokens = 650;
+        this.reasoningEffort = "minimal";
+
+        // Cache results so repeated searches are instant.
+        this._landmarkCache = new Map(); // key -> { at:number, data:Array }
+        this._cacheTtlMs = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+        // Cache Wikimedia image lookups too (saves latency + avoids rate limiting).
+        this._imageCache = new Map(); // key -> { at:number, data:Array<string> }
     }
 
     setApiKey(key) {
@@ -25,12 +32,19 @@ export class LandmarkService {
             console.log("Using sample data:", sampleText);
             return this.processText(sampleText);
         }
+
+        const cached = this.getCachedLandmarks(country);
+        if (cached) return cached;
         
         if (!this.apikey) {
             throw new Error("Please enter your OpenAI API key in the UI");
         }
 
+        let timeoutId;
         try {
+            const controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), this.aiTimeoutMs);
+
             const response = await fetch(this.openaiURL, {
                 method: 'POST',
                 headers: {
@@ -39,25 +53,103 @@ export class LandmarkService {
                 },
                 body: JSON.stringify({
                     model: this.ai_model,
-                    messages: [{
-                        role: "user",
-                        content: `For the country of ${country}, I want you to return a brief description of each of this country's 4 most famous landmarks. Each description should be aproximately 45 words in length. Give your response in the following format: "Insert name of landmark 1 here: Insert Description 1 here (delimit with "/" symbol) Insert name of landmark 2 here: Insert Description 2 here (delimit with "/" symbol) Insert name of landmark 3 here: Insert Description 3 here (delimit with "/" symbol) Insert name of landmark 4 here: Insert Description 4 here"." It is vitally important that you delimit between each landmark with a / symbol`,
-                    }],
-                    max_completion_tokens: 10000,
+                    // Lower reasoning + strict structured output => faster + more reliable parsing.
+                    reasoning_effort: this.reasoningEffort,
+                    response_format: {
+                        type: "json_schema",
+                        json_schema: {
+                            name: "landmarks_response",
+                            strict: true,
+                            schema: {
+                                type: "object",
+                                additionalProperties: false,
+                                required: ["landmarks"],
+                                properties: {
+                                    landmarks: {
+                                        type: "array",
+                                        minItems: 4,
+                                        maxItems: 4,
+                                        items: {
+                                            type: "object",
+                                            additionalProperties: false,
+                                            required: ["name", "desc"],
+                                            properties: {
+                                                name: { type: "string" },
+                                                desc: { type: "string" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    messages: [
+                        {
+                            role: "developer",
+                            content:
+                                "Return JSON only. Provide exactly 4 famous landmarks for the given country. " +
+                                "Each description must be 25-40 words. Keep language simple and factual."
+                        },
+                        { role: "user", content: country }
+                    ],
+                    max_completion_tokens: this.maxCompletionTokens,
                 }),
+                signal: controller.signal,
             });
 
-            const data = await response.json();
+            const data = await response.json().catch(() => null);
+            if (!response.ok) {
+                const msg =
+                    data?.error?.message ||
+                    `OpenAI request failed (${response.status} ${response.statusText})`;
+                throw new Error(msg);
+            }
+
             if (data.choices && data.choices.length > 0) {
-                const generatedText = data.choices[0].message.content;
-                console.log(generatedText);
-                return this.processText(generatedText);
+                const generatedText = data.choices[0].message?.content;
+                if (typeof generatedText === "string") {
+                    const parsed = this.processStructuredLandmarks(generatedText);
+                    if (parsed.length > 0) {
+                        this.setCachedLandmarks(country, parsed);
+                        return parsed;
+                    }
+                    // Fallback for unexpected formats.
+                    const fallback = this.processText(generatedText);
+                    if (fallback.length > 0) {
+                        this.setCachedLandmarks(country, fallback);
+                        return fallback;
+                    }
+                }
             }
         } catch (error) {
+            if (error?.name === "AbortError") {
+                throw new Error("OpenAI request timed out. Please try again.");
+            }
             console.error('Error:', error);
             throw error;
+        } finally {
+            // Clear the timeout even if fetch throws (AbortError, network errors, etc.).
+            try { clearTimeout(timeoutId); } catch { /* no-op */ }
         }
         return [];
+    }
+
+    processStructuredLandmarks(generatedText) {
+        try {
+            const obj = JSON.parse(generatedText);
+            const list = obj?.landmarks;
+            if (!Array.isArray(list)) return [];
+
+            return list
+                .slice(0, 4)
+                .map((l) => ({
+                    name: typeof l?.name === "string" ? l.name.trim() : "",
+                    desc: typeof l?.desc === "string" ? l.desc.trim() : ""
+                }))
+                .filter((l) => l.name);
+        } catch {
+            return [];
+        }
     }
 
     processText(generatedText) {
@@ -81,42 +173,181 @@ export class LandmarkService {
         }
     }
 
-    async fetchImages(landmarks) {
-        // Check if we're in test mode (based on landmark names)
-        const isTestMode = landmarks.some(l => l.name && (l.name.includes('Eiffel Tower') || l.name.includes('Statue of Liberty')));
-        
-        if (isTestMode) {
-            const sampleImageUrls = [
-                'https://images.unsplash.com/photo-1511739001486-6bfe10ce785f?w=800', // Eiffel Tower
-                'https://images.unsplash.com/photo-1485738422979-f5c462d49f74?w=800', // Statue of Liberty
-                'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800', // Great Wall
-                'https://images.unsplash.com/photo-1564507592333-c60657eea523?w=800'  // Taj Mahal
-            ];
-            
-            console.log("Using sample images");
-            return sampleImageUrls;
-        }
-        
-        if (!this.googleApiKey || !this.googleCx) {
-            console.warn("Google API keys missing");
-            return new Array(landmarks.length).fill(null);
-        }
+    getCachedLandmarks(country) {
+        const key = this.normalizeCountryKey(country);
+        const now = Date.now();
 
-        const fetchImage = async (landmarkName) => {
-            const url = `${this.search_url}?key=${this.googleApiKey}&cx=${this.googleCx}&searchType=image&q=${encodeURIComponent(landmarkName)}`;
-            try {
-                const response = await fetch(url);
-                const data = await response.json();
-                if (data.items && data.items.length > 0) {
-                    return data.items[0].link;
-                }
-            } catch (error) {
-                console.error("Error fetching image", error);
-            }
+        const inMem = this._landmarkCache.get(key);
+        if (inMem && now - inMem.at < this._cacheTtlMs) return inMem.data;
+
+        try {
+            const raw = localStorage.getItem(`landmark_cache:${key}`);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed?.at || !Array.isArray(parsed?.data)) return null;
+            if (now - parsed.at >= this._cacheTtlMs) return null;
+
+            this._landmarkCache.set(key, parsed);
+            return parsed.data;
+        } catch {
             return null;
-        };
+        }
+    }
 
-        const imagePromises = landmarks.map(l => fetchImage(l.name));
+    setCachedLandmarks(country, data) {
+        const key = this.normalizeCountryKey(country);
+        const payload = { at: Date.now(), data };
+        this._landmarkCache.set(key, payload);
+        try {
+            localStorage.setItem(`landmark_cache:${key}`, JSON.stringify(payload));
+        } catch {
+            // Ignore storage quota / privacy mode failures.
+        }
+    }
+
+    getCachedImageCandidates(query) {
+        const key = this.normalizeCountryKey(query);
+        const now = Date.now();
+
+        const inMem = this._imageCache.get(key);
+        if (inMem && now - inMem.at < this._cacheTtlMs && Array.isArray(inMem.data)) return inMem.data;
+
+        try {
+            const raw = localStorage.getItem(`image_cache:${key}`);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed?.at || !Array.isArray(parsed?.data)) return null;
+            if (now - parsed.at >= this._cacheTtlMs) return null;
+
+            this._imageCache.set(key, parsed);
+            return parsed.data;
+        } catch {
+            return null;
+        }
+    }
+
+    setCachedImageCandidates(query, data) {
+        const key = this.normalizeCountryKey(query);
+        const payload = { at: Date.now(), data };
+        this._imageCache.set(key, payload);
+        try {
+            localStorage.setItem(`image_cache:${key}`, JSON.stringify(payload));
+        } catch {
+            // Ignore storage quota / privacy mode failures.
+        }
+    }
+
+    normalizeCountryKey(country) {
+        return String(country || "").trim().toLowerCase();
+    }
+
+    async fetchImages(landmarks) {
+        const imagePromises = landmarks.map((l) => {
+            if (!l?.name) return Promise.resolve(null);
+            return this.fetchWikimediaImageCandidates(l.name);
+        });
+
         return await Promise.all(imagePromises);
+    }
+
+    async fetchWikimediaImageCandidates(query) {
+        const cached = this.getCachedImageCandidates(query);
+        if (cached) return cached;
+
+        const fromWikipedia = await this.fetchWikipediaPageImageCandidates(query);
+        if (fromWikipedia && fromWikipedia.length > 0) {
+            this.setCachedImageCandidates(query, fromWikipedia);
+            return fromWikipedia;
+        }
+
+        const fromCommons = await this.fetchCommonsFileImageCandidates(query);
+        if (fromCommons && fromCommons.length > 0) {
+            this.setCachedImageCandidates(query, fromCommons);
+            return fromCommons;
+        }
+
+        return null;
+    }
+
+    async fetchWikipediaPageImageCandidates(query) {
+        const endpoint = "https://en.wikipedia.org/w/api.php";
+        const params = new URLSearchParams({
+            action: "query",
+            format: "json",
+            origin: "*",
+            redirects: "1",
+            generator: "search",
+            gsrsearch: query,
+            gsrlimit: "1",
+            gsrnamespace: "0",
+            prop: "pageimages",
+            piprop: "thumbnail|original",
+            pithumbsize: "1024"
+        });
+
+        try {
+            const response = await fetch(`${endpoint}?${params.toString()}`);
+            const data = await response.json();
+
+            const pagesObj = data?.query?.pages;
+            if (!pagesObj) return null;
+
+            const pages = Object.values(pagesObj);
+            if (pages.length === 0) return null;
+
+            pages.sort((a, b) => (a?.index ?? 999) - (b?.index ?? 999));
+            const page = pages[0];
+            if (!page) return null;
+
+            const candidates = [];
+            if (page.thumbnail?.source) candidates.push(page.thumbnail.source);
+            if (page.original?.source) candidates.push(page.original.source);
+
+            return candidates.length > 0 ? candidates : null;
+        } catch (error) {
+            console.error("Error fetching Wikipedia image", error);
+            return null;
+        }
+    }
+
+    async fetchCommonsFileImageCandidates(query) {
+        const endpoint = "https://commons.wikimedia.org/w/api.php";
+        const params = new URLSearchParams({
+            action: "query",
+            format: "json",
+            origin: "*",
+            generator: "search",
+            gsrsearch: query,
+            gsrlimit: "1",
+            gsrnamespace: "6", // File:
+            prop: "imageinfo",
+            iiprop: "url",
+            iiurlwidth: "1024"
+        });
+
+        try {
+            const response = await fetch(`${endpoint}?${params.toString()}`);
+            const data = await response.json();
+
+            const pagesObj = data?.query?.pages;
+            if (!pagesObj) return null;
+
+            const pages = Object.values(pagesObj);
+            if (pages.length === 0) return null;
+
+            pages.sort((a, b) => (a?.index ?? 999) - (b?.index ?? 999));
+            const page = pages[0];
+            const info = page?.imageinfo?.[0];
+            if (!info) return null;
+
+            const candidates = [];
+            if (info.thumburl) candidates.push(info.thumburl);
+            if (info.url) candidates.push(info.url);
+
+            return candidates.length > 0 ? candidates : null;
+        } catch (error) {
+            console.error("Error fetching Wikimedia Commons image", error);
+            return null;
+        }
     }
 }

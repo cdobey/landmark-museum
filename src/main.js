@@ -32,6 +32,8 @@ const storedApiKey = localStorage.getItem('openai_api_key');
 if (storedApiKey) {
     apiKeyInput.value = storedApiKey;
     world.apikey = storedApiKey;
+    // Keep the LandmarkService in sync so world-level gating behaves consistently.
+    world.landmarkService?.setApiKey(storedApiKey);
     apiStatus.className = 'success';
     apiStatus.innerHTML = '✓ API key loaded from storage';
     enterMuseumBtn.disabled = false;
@@ -69,6 +71,7 @@ validateKeyBtn.addEventListener('click', async () => {
             // Store the API key
             localStorage.setItem('openai_api_key', apiKey);
             world.apikey = apiKey;
+            world.landmarkService?.setApiKey(apiKey);
         } else {
             // API key is invalid
             apiStatus.className = 'error';

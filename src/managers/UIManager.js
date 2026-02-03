@@ -64,7 +64,7 @@ export class UIManager {
                 e.stopPropagation();
             });
         }
-        
+
         if (overlaySubmit && overlayInput) {
             const submitSearch = () => {
                 const country = overlayInput.value;
@@ -83,8 +83,13 @@ export class UIManager {
                 e.stopPropagation();
                 submitSearch();
             });
-            overlayInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') submitSearch();
+            overlayInput.addEventListener('keydown', (e) => {
+                // Prevent movement keys from leaking to the world while typing.
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submitSearch();
+                }
             });
         }
         

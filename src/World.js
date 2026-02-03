@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
+import { Octree } from 'three/examples/jsm/math/Octree.js';
+import { Capsule } from 'three/examples/jsm/math/Capsule.js';
 import { Environment } from './components/Environment.js';
 import { UIManager } from './managers/UIManager.js';
 import { PointerLockControls } from './PointerLockControls.js';
@@ -33,8 +35,18 @@ export class World {
         this.prevTime = performance.now();
         this.velocity = new THREE.Vector3();
         this.direction = new THREE.Vector3();
+        this._tempVec3 = new THREE.Vector3();
         this.controls = null;
         this.MOVESPEED = 3;
+        this.JUMP_SPEED = 220;
+
+        // Simple collision (capsule vs. static scene octree)
+        this.worldOctree = new Octree();
+        this.playerCollider = null;
+        this.playerOnFloor = false;
+        this.PLAYER_RADIUS = 5;
+        this.PLAYER_EYE_Y = 17.5;
+        this.spawnPoint = new THREE.Vector3(0, this.PLAYER_EYE_Y, 175);
         
         // Interaction
         this.searchMesh = null;
@@ -45,6 +57,11 @@ export class World {
         this.previousMeshGroups = []; // Plaques
         this.previousImageGroups = []; // Images
         this.previousSpotLights = [];
+
+        // Assets
+        this._plaqueFontUrl = 'https://threejs.org/examples/fonts/helvetiker_regular.typeface.json';
+        this._plaqueFont = null;
+        this._plaqueFontPromise = null;
     }
 
     init() {
@@ -73,6 +90,15 @@ export class World {
         this.controls = new PointerLockControls(this.camera);
         this.scene.add(this.controls.getObject());
         this.controls.getObject().position.set(0, 17.5, 175);
+        {
+            const spawn = this.controls.getObject().position;
+            this.spawnPoint.copy(spawn);
+            this.playerCollider = new Capsule(
+                new THREE.Vector3(spawn.x, this.PLAYER_RADIUS, spawn.z),
+                new THREE.Vector3(spawn.x, this.PLAYER_EYE_Y, spawn.z),
+                this.PLAYER_RADIUS
+            );
+        }
 
         // Event Listeners
         document.addEventListener('keydown', this.onKeyDown.bind(this), false);
@@ -91,9 +117,29 @@ export class World {
         
         // Setup UI
         this.uiManager.setup();
-        
-        // Setup UI
-        this.uiManager.setup();
+
+        // Warm up the plaque font so the first search doesn't wait on it.
+        this.getPlaqueFont().catch(() => {});
+    }
+
+    getPlaqueFont() {
+        if (this._plaqueFont) return Promise.resolve(this._plaqueFont);
+        if (this._plaqueFontPromise) return this._plaqueFontPromise;
+
+        const loader = new FontLoader();
+        this._plaqueFontPromise = new Promise((resolve, reject) => {
+            loader.load(
+                this._plaqueFontUrl,
+                (font) => {
+                    this._plaqueFont = font;
+                    resolve(font);
+                },
+                undefined,
+                (err) => reject(err)
+            );
+        });
+
+        return this._plaqueFontPromise;
     }
 
     buildScene() {
@@ -111,6 +157,11 @@ export class World {
         searchTexture.needsUpdate = true;
         
         this.searchMesh = this.environment.create3DSearchInterface(width, length, height, searchTexture);
+
+        // Build collision data from static scene geometry.
+        // This is intentionally done once; dynamic exhibit content isn't included.
+        this.worldOctree = new Octree();
+        this.worldOctree.fromGraphNode(this.scene);
     }
 
     async onSearch(country) {
@@ -119,9 +170,11 @@ export class World {
         try {
             const landmarks = await this.landmarkService.fetchLandmarkData(country);
             if (landmarks.length > 0) {
+                // Start image fetching ASAP; text placement does async font loading anyway.
+                const imagePromise = this.landmarkService.fetchImages(landmarks);
                 this.placeText(landmarks);
                 
-                const imageUrls = await this.landmarkService.fetchImages(landmarks);
+                const imageUrls = await imagePromise;
                 this.placeImage(imageUrls);
             }
         } catch (error) {
@@ -146,8 +199,7 @@ export class World {
         });
         this.previousMeshGroups = [];
 
-        const loader = new FontLoader();
-        loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', (font) => {
+        this.getPlaqueFont().then((font) => {
             const maxCharCount = 35; 
             const textMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
@@ -188,6 +240,8 @@ export class World {
                     plaqueGroup.add(textMesh);
                 });
             });
+        }).catch((err) => {
+            console.error("Failed to load font:", err);
         });
     }
 
@@ -212,12 +266,57 @@ export class World {
         this.previousSpotLights = [];
 
         const imageLoader = new THREE.TextureLoader();
+        imageLoader.setCrossOrigin('anonymous');
         const geometry = new THREE.PlaneGeometry(37, 37);
 
-        imageUrls.forEach((url, index) => {
-            if (!url) return;
-            
-            imageLoader.load(url, (texture) => {
+        const makePlaceholderTexture = (label) => {
+            const size = 512;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#e6e6e6';
+            ctx.fillRect(0, 0, size, size);
+            ctx.strokeStyle = '#b0b0b0';
+            ctx.lineWidth = 12;
+            ctx.strokeRect(18, 18, size - 36, size - 36);
+            ctx.fillStyle = '#2b2b2b';
+            ctx.font = 'bold 32px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, size / 2, size / 2);
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.needsUpdate = true;
+            return texture;
+        };
+
+        const loadTextureWithFallback = (candidates, onLoad) => {
+            const list = Array.isArray(candidates) ? candidates : [candidates];
+            const urls = list.filter(Boolean);
+            if (urls.length === 0) {
+                onLoad(makePlaceholderTexture('No image'));
+                return;
+            }
+
+            const tryIndex = (i) => {
+                imageLoader.load(
+                    urls[i],
+                    (texture) => onLoad(texture),
+                    undefined,
+                    () => {
+                        if (i + 1 < urls.length) return tryIndex(i + 1);
+                        onLoad(makePlaceholderTexture('Image unavailable'));
+                    }
+                );
+            };
+
+            tryIndex(0);
+        };
+
+        imageUrls.forEach((urlOrCandidates, index) => {
+            if (!urlOrCandidates) return;
+
+            loadTextureWithFallback(urlOrCandidates, (texture) => {
                 const material = new THREE.MeshBasicMaterial({ map: texture });
                 const mesh = new THREE.Mesh(geometry, material);
                 const group = new THREE.Group();
@@ -264,13 +363,18 @@ export class World {
     }
 
     onKeyDown(event) {
+        // Ignore movement keys while the search UI is open. Otherwise typing a space in
+        // "United States", etc. would trigger a jump that applies after pointer lock resumes.
+        if (this.uiManager?.isOverlayVisible?.()) return;
+
         switch (event.keyCode) {
             case 38: case 87: this.moveForward = true; break;
             case 37: case 65: this.moveLeft = true; break;
             case 40: case 83: this.moveBackward = true; break;
             case 39: case 68: this.moveRight = true; break;
             case 32: 
-                if (this.canJump === true) this.velocity.y += 350;
+                event.preventDefault();
+                if (this.canJump === true) this.velocity.y += this.JUMP_SPEED;
                 this.canJump = false;
                 break;
         }
@@ -320,40 +424,69 @@ export class World {
     }
 
     update() {
+        if (!this.controls || !this.playerCollider) return;
+
         if (this.controls.enabled === true) {
-            this.raycaster.ray.origin.copy(this.controls.getObject().position);
-            this.raycaster.ray.origin.y -= 10;
-
-            const intersections = this.raycaster.intersectObjects(this.objects);
-            const onObject = intersections.length > 0;
-
             const time = performance.now();
-            const delta = (time - this.prevTime) / 1000;
+            // Prevent large frame hitches (e.g. during asset creation/loading) from
+            // causing the capsule to "tunnel" through the floor in one step.
+            const delta = Math.min(0.05, (time - this.prevTime) / 1000);
 
-            this.velocity.x -= this.velocity.x * 10.0 * delta;
-            this.velocity.z -= this.velocity.z * 10.0 * delta;
-            this.velocity.y -= 9.8 * 100.0 * delta;
+            const STEPS = 5;
+            const stepDelta = delta / STEPS;
 
-            this.direction.z = Number(this.moveForward) - Number(this.moveBackward);
-            this.direction.x = Number(this.moveLeft) - Number(this.moveRight);
-            this.direction.normalize();
-
-            if (this.moveForward || this.moveBackward) this.velocity.z -= this.direction.z * 400.0 * this.MOVESPEED * delta;
-            if (this.moveLeft || this.moveRight) this.velocity.x -= this.direction.x * 400.0 * this.MOVESPEED * delta;
-
-            if (onObject === true) {
-                this.velocity.y = Math.max(0, this.velocity.y);
-                this.canJump = true;
+            // Compute intended movement direction once per frame.
+            const moveDir = this.direction.set(
+                Number(this.moveRight) - Number(this.moveLeft),
+                0,
+                Number(this.moveBackward) - Number(this.moveForward)
+            );
+            if (moveDir.lengthSq() > 0) {
+                moveDir.normalize();
+                moveDir.applyQuaternion(this.controls.getObject().quaternion);
             }
 
-            this.controls.getObject().translateX(this.velocity.x * delta);
-            this.controls.getObject().translateY(this.velocity.y * delta);
-            this.controls.getObject().translateZ(this.velocity.z * delta);
+            for (let i = 0; i < STEPS; i++) {
+                // Damping (horizontal) + gravity.
+                this.velocity.x -= this.velocity.x * 10.0 * stepDelta;
+                this.velocity.z -= this.velocity.z * 10.0 * stepDelta;
+                this.velocity.y -= 9.8 * 100.0 * stepDelta;
 
-            if (this.controls.getObject().position.y < 17.5) {
-                this.velocity.y = 0;
-                this.controls.getObject().position.y = 17.5;
-                this.canJump = true;
+                if (moveDir.lengthSq() > 0) {
+                    this.velocity.addScaledVector(moveDir, 400.0 * this.MOVESPEED * stepDelta);
+                }
+
+                // Integrate movement with collisions (capsule vs. static scene octree).
+                this._tempVec3.copy(this.velocity).multiplyScalar(stepDelta);
+                this.playerCollider.translate(this._tempVec3);
+
+                this.playerOnFloor = false;
+                const result = this.worldOctree?.capsuleIntersect(this.playerCollider);
+                if (result) {
+                    this.playerOnFloor = result.normal.y > 0;
+
+                    // Slide along surfaces instead of sticking.
+                    this.velocity.addScaledVector(result.normal, -result.normal.dot(this.velocity));
+
+                    // Resolve penetration.
+                    this.playerCollider.translate(result.normal.multiplyScalar(result.depth));
+
+                    if (this.playerOnFloor) {
+                        this.velocity.y = Math.max(0, this.velocity.y);
+                    }
+                }
+            }
+
+            this.canJump = this.playerOnFloor;
+            this.controls.getObject().position.copy(this.playerCollider.end);
+
+            // Safety net: if we ever end up far below the level (usually due to a hitch),
+            // snap back to spawn instead of falling forever.
+            if (!Number.isFinite(this.playerCollider.end.y) || this.playerCollider.end.y < -100) {
+                this.velocity.set(0, 0, 0);
+                this.playerCollider.start.set(this.spawnPoint.x, this.PLAYER_RADIUS, this.spawnPoint.z);
+                this.playerCollider.end.set(this.spawnPoint.x, this.PLAYER_EYE_Y, this.spawnPoint.z);
+                this.controls.getObject().position.copy(this.playerCollider.end);
             }
 
             this.prevTime = time;
