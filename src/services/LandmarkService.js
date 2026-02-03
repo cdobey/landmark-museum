@@ -1,16 +1,15 @@
 export class LandmarkService {
     constructor() {
-        // API Configuration
-        this.openaiURL = "https://api.openai.com/v1/chat/completions";
-        // Fastest/cheapest general-purpose OpenAI model (good enough for short blurbs).
-        // Use the alias (not a snapshot) so performance improvements apply automatically.
-        this.ai_model = "gpt-5-nano";
+        // API Configuration (server-side calls)
+        this.provider = "openai";
         this.apikey = ""; // Will be set from UI
+        this.useFreeTrial = false;
+        this.freeTrialRemaining = 3;
+        this.freeTrialResetAt = null;
+        this.onFreeTrialChange = null;
 
-        // Speed + reliability knobs
+        // Speed + reliability knobs (client-to-server)
         this.aiTimeoutMs = 15000;
-        this.maxCompletionTokens = 650;
-        this.reasoningEffort = "minimal";
 
         // Cache results so repeated searches are instant.
         this._landmarkCache = new Map(); // key -> { at:number, data:Array }
@@ -20,8 +19,49 @@ export class LandmarkService {
         this._imageCache = new Map(); // key -> { at:number, data:Array<string> }
     }
 
+    setProvider(provider) {
+        const value = String(provider || "").trim().toLowerCase();
+        if (value === "anthropic" || value === "google") {
+            this.provider = value;
+        } else {
+            this.provider = "openai";
+        }
+    }
+
     setApiKey(key) {
-        this.apikey = key;
+        this.apikey = String(key || "").trim();
+    }
+
+    setFreeTrialState(enabled, remaining) {
+        this.useFreeTrial = Boolean(enabled);
+        if (Number.isFinite(remaining)) {
+            this.freeTrialRemaining = Math.max(0, Number(remaining));
+        }
+    }
+
+    setFreeTrialResetAt(resetAt) {
+        if (Number.isFinite(resetAt)) {
+            this.freeTrialResetAt = Number(resetAt);
+        } else {
+            this.freeTrialResetAt = null;
+        }
+    }
+
+    setUseFreeTrial(enabled) {
+        this.useFreeTrial = Boolean(enabled);
+    }
+
+    setFreeTrialRemaining(remaining) {
+        if (Number.isFinite(remaining)) {
+            this.freeTrialRemaining = Math.max(0, Number(remaining));
+        }
+    }
+
+    decrementFreeTrial() {
+        this.freeTrialRemaining = Math.max(0, this.freeTrialRemaining - 1);
+        if (this.onFreeTrialChange) {
+            this.onFreeTrialChange(this.freeTrialRemaining, this.freeTrialResetAt);
+        }
     }
 
     async fetchLandmarkData(country) {
@@ -33,97 +73,83 @@ export class LandmarkService {
             return this.processText(sampleText);
         }
 
+        if (this.useFreeTrial) {
+            if (this.freeTrialRemaining <= 0) {
+                const now = Date.now();
+                if (this.freeTrialResetAt && now < this.freeTrialResetAt) {
+                    throw new Error("Free trial used up. Please enter your own API key.");
+                }
+            }
+        } else if (!this.apikey) {
+            const label = this.provider === "anthropic"
+                ? "Anthropic"
+                : this.provider === "google"
+                    ? "Google"
+                    : "OpenAI";
+            throw new Error(`Please enter your ${label} API key in the UI`);
+        }
+
         const cached = this.getCachedLandmarks(country);
         if (cached) return cached;
-        
-        if (!this.apikey) {
-            throw new Error("Please enter your OpenAI API key in the UI");
-        }
 
         let timeoutId;
         try {
             const controller = new AbortController();
             timeoutId = setTimeout(() => controller.abort(), this.aiTimeoutMs);
 
-            const response = await fetch(this.openaiURL, {
+            const endpoint = this.useFreeTrial ? "/api/landmarks/free" : "/api/landmarks";
+            const payload = this.useFreeTrial
+                ? { country }
+                : { country, provider: this.provider, apiKey: this.apikey };
+
+            const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.apikey}`,
                 },
-                body: JSON.stringify({
-                    model: this.ai_model,
-                    // Lower reasoning + strict structured output => faster + more reliable parsing.
-                    reasoning_effort: this.reasoningEffort,
-                    response_format: {
-                        type: "json_schema",
-                        json_schema: {
-                            name: "landmarks_response",
-                            strict: true,
-                            schema: {
-                                type: "object",
-                                additionalProperties: false,
-                                required: ["landmarks"],
-                                properties: {
-                                    landmarks: {
-                                        type: "array",
-                                        minItems: 4,
-                                        maxItems: 4,
-                                        items: {
-                                            type: "object",
-                                            additionalProperties: false,
-                                            required: ["name", "desc"],
-                                            properties: {
-                                                name: { type: "string" },
-                                                desc: { type: "string" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    messages: [
-                        {
-                            role: "developer",
-                            content:
-                                "Return JSON only. Provide exactly 4 famous landmarks for the given country. " +
-                                "Each description must be 25-40 words. Keep language simple and factual."
-                        },
-                        { role: "user", content: country }
-                    ],
-                    max_completion_tokens: this.maxCompletionTokens,
-                }),
+                body: JSON.stringify(payload),
                 signal: controller.signal,
             });
 
             const data = await response.json().catch(() => null);
             if (!response.ok) {
+                if (this.useFreeTrial && Number.isFinite(data?.remaining)) {
+                    this.setFreeTrialRemaining(data.remaining);
+                    if (Number.isFinite(data?.resetAt)) {
+                        this.setFreeTrialResetAt(data.resetAt);
+                    }
+                    if (this.onFreeTrialChange) {
+                        this.onFreeTrialChange(this.freeTrialRemaining, this.freeTrialResetAt);
+                    }
+                }
                 const msg =
                     data?.error?.message ||
-                    `OpenAI request failed (${response.status} ${response.statusText})`;
+                    data?.error ||
+                    `AI request failed (${response.status} ${response.statusText})`;
                 throw new Error(msg);
             }
 
-            if (data.choices && data.choices.length > 0) {
-                const generatedText = data.choices[0].message?.content;
-                if (typeof generatedText === "string") {
-                    const parsed = this.processStructuredLandmarks(generatedText);
-                    if (parsed.length > 0) {
-                        this.setCachedLandmarks(country, parsed);
-                        return parsed;
-                    }
-                    // Fallback for unexpected formats.
-                    const fallback = this.processText(generatedText);
-                    if (fallback.length > 0) {
-                        this.setCachedLandmarks(country, fallback);
-                        return fallback;
+            const landmarks = Array.isArray(data?.landmarks) ? data.landmarks : [];
+            if (landmarks.length > 0) {
+                this.setCachedLandmarks(country, landmarks);
+                if (this.useFreeTrial) {
+                    if (Number.isFinite(data?.remaining)) {
+                        this.setFreeTrialRemaining(data.remaining);
+                        if (Number.isFinite(data?.resetAt)) {
+                            this.setFreeTrialResetAt(data.resetAt);
+                        }
+                        if (this.onFreeTrialChange) {
+                            this.onFreeTrialChange(this.freeTrialRemaining, this.freeTrialResetAt);
+                        }
+                    } else {
+                        this.decrementFreeTrial();
                     }
                 }
+                return landmarks;
             }
         } catch (error) {
             if (error?.name === "AbortError") {
-                throw new Error("OpenAI request timed out. Please try again.");
+                throw new Error("AI request timed out. Please try again.");
             }
             console.error('Error:', error);
             throw error;

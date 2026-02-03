@@ -1,57 +1,10 @@
 export class UIManager {
-    constructor(onSearch, onApiKey) {
+    constructor(onSearch) {
         this.onSearch = onSearch;
-        this.onApiKey = onApiKey;
         this.searchCanvas = null;
     }
 
     setup() {
-        // Setup API Key UI
-        const apiInput = document.getElementById('api-key-input');
-        const validateBtn = document.getElementById('validate-key-btn');
-        const enterBtn = document.getElementById('enter-museum-btn');
-        const blocker = document.getElementById('blocker');
-        const instructions = document.getElementById('instructions');
-        const apiStatus = document.getElementById('api-status');
-
-        if (validateBtn && apiInput) {
-            // Stop propagation on input click to prevent entering app
-            apiInput.addEventListener('click', (e) => {
-                e.stopPropagation();
-            });
-
-            validateBtn.addEventListener('click', (e) => {
-                e.stopPropagation(); // Prevent entering app
-                const key = apiInput.value.trim();
-                if (key) {
-                    if (this.onApiKey) {
-                        this.onApiKey(key);
-                    }
-                    if (apiStatus) {
-                        apiStatus.textContent = "Key set!";
-                        apiStatus.style.color = "lightgreen";
-                    }
-                    if (enterBtn) {
-                        enterBtn.disabled = false;
-                        enterBtn.style.opacity = "1";
-                        enterBtn.style.cursor = "pointer";
-                    }
-                } else {
-                    if (apiStatus) {
-                        apiStatus.textContent = "Please enter a key";
-                        apiStatus.style.color = "red";
-                    }
-                }
-            });
-        }
-
-        if (enterBtn) {
-            enterBtn.addEventListener('click', () => {
-                if (blocker) blocker.style.display = 'none';
-                this.requestPointerLock();
-            });
-        }
-
         // Setup overlay search
         const overlaySubmit = document.getElementById('search-overlay-submit');
         const overlayInput = document.getElementById('search-input-field');

@@ -73,6 +73,34 @@ body {
     color: #999 !important;
 }
 
+#api-provider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+#api-provider-row label {
+    font-size: 14px;
+    color: #ccc;
+}
+
+#api-provider-select {
+    flex: 1;
+    background: rgba(255,255,255,0.1);
+    border: 2px solid rgba(255,255,255,0.2);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 8px;
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+}
+
+#api-provider-select:focus {
+    border-color: #b8860B;
+}
+
 #api-input-container {
     display: flex;
     gap: 10px;
@@ -164,13 +192,49 @@ body {
     transition: transform 0.1s, background 0.2s;
 }
 
+.normbutton.secondary {
+    background: transparent;
+    color: #f7e7b1;
+    border: 1px solid rgba(184,134,11,0.6);
+}
+
 .normbutton:hover {
     background: #eee;
     transform: scale(1.05);
 }
 
+.normbutton.secondary:hover {
+    background: rgba(184,134,11,0.15);
+}
+
 .normbutton:active {
     transform: scale(0.95);
+}
+
+#free-trial-btn {
+    width: 100%;
+}
+
+#free-search-counter {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(0,0,0,0.7);
+    color: #fff2c6;
+    font-size: 14px;
+    letter-spacing: 0.3px;
+    border: 1px solid rgba(184,134,11,0.5);
+    display: none;
+    z-index: 25;
+    pointer-events: none;
+}
+
+#free-search-counter.visible {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
 /* 3D Search Overlay */

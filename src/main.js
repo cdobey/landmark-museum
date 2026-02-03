@@ -21,78 +21,202 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// API Key Management
+// API Key Management + Free Trial
 const apiKeyInput = document.getElementById('api-key-input');
 const validateKeyBtn = document.getElementById('validate-key-btn');
 const apiStatus = document.getElementById('api-status');
 const enterMuseumBtn = document.getElementById('enter-museum-btn');
+const providerSelect = document.getElementById('api-provider-select');
+const freeTrialBtn = document.getElementById('free-trial-btn');
+const freeCounter = document.getElementById('free-search-counter');
 
-// Check if API key is already stored
-const storedApiKey = localStorage.getItem('openai_api_key');
-if (storedApiKey) {
-    apiKeyInput.value = storedApiKey;
-    world.apikey = storedApiKey;
-    // Keep the LandmarkService in sync so world-level gating behaves consistently.
-    world.landmarkService?.setApiKey(storedApiKey);
-    apiStatus.className = 'success';
-    apiStatus.innerHTML = '✓ API key loaded from storage';
-    enterMuseumBtn.disabled = false;
+const PROVIDER_KEY = 'lm_provider';
+const FREE_REMAINING_KEY = 'lm_free_remaining';
+const FREE_ACTIVE_KEY = 'lm_use_free';
+const FREE_RESET_KEY = 'lm_free_reset_at';
+const FREE_TRIAL_TOTAL = 3;
+
+const PROVIDER_LABELS = {
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    google: 'Google',
+};
+
+const KEY_STORAGE = {
+    openai: 'openai_api_key',
+    anthropic: 'anthropic_api_key',
+    google: 'google_api_key',
+};
+
+const normalizeProvider = (value) => {
+    const v = String(value || '').trim().toLowerCase();
+    if (v === 'anthropic' || v === 'google') return v;
+    return 'openai';
+};
+
+const getStoredKey = (provider) => {
+    const key = KEY_STORAGE[provider] || KEY_STORAGE.openai;
+    return localStorage.getItem(key) || '';
+};
+
+const setStoredKey = (provider, key) => {
+    const storageKey = KEY_STORAGE[provider] || KEY_STORAGE.openai;
+    if (key) {
+        localStorage.setItem(storageKey, key);
+    } else {
+        localStorage.removeItem(storageKey);
+    }
+};
+
+const storedRemainingRaw = localStorage.getItem(FREE_REMAINING_KEY);
+let freeRemaining =
+    storedRemainingRaw === null ? FREE_TRIAL_TOTAL : Number(storedRemainingRaw);
+if (!Number.isFinite(freeRemaining)) freeRemaining = FREE_TRIAL_TOTAL;
+if (storedRemainingRaw === null) {
+    localStorage.setItem(FREE_REMAINING_KEY, String(freeRemaining));
 }
 
-validateKeyBtn.addEventListener('click', async () => {
-    const apiKey = apiKeyInput.value.trim();
-    
-    if (!apiKey) {
-        apiStatus.className = 'error';
-        apiStatus.innerHTML = '✗ Please enter an API key';
-        return;
-    }
-    
-    // Show validating status
-    apiStatus.className = 'validating';
-    apiStatus.innerHTML = '⟳ Validating API key...';
-    validateKeyBtn.disabled = true;
-    
-    try {
-        // Test the API key with a minimal request
-        const response = await fetch('https://api.openai.com/v1/models', {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-            },
-        });
-        
-        if (response.ok) {
-            // API key is valid
-            apiStatus.className = 'success';
-            apiStatus.innerHTML = '✓ API key validated successfully!';
-            enterMuseumBtn.disabled = false;
-            
-            // Store the API key
-            localStorage.setItem('openai_api_key', apiKey);
-            world.apikey = apiKey;
-            world.landmarkService?.setApiKey(apiKey);
-        } else {
-            // API key is invalid
-            apiStatus.className = 'error';
-            apiStatus.innerHTML = '✗ Invalid API key. Please check and try again.';
-            enterMuseumBtn.disabled = true;
-        }
-    } catch (error) {
-        apiStatus.className = 'error';
-        apiStatus.innerHTML = '✗ Error validating API key. Check your connection.';
-        enterMuseumBtn.disabled = true;
-    } finally {
-        validateKeyBtn.disabled = false;
-    }
-});
+let freeResetAt = Number(localStorage.getItem(FREE_RESET_KEY));
+if (!Number.isFinite(freeResetAt)) freeResetAt = null;
+if (freeResetAt && Date.now() >= freeResetAt) {
+    freeResetAt = null;
+    freeRemaining = FREE_TRIAL_TOTAL;
+    localStorage.setItem(FREE_REMAINING_KEY, String(freeRemaining));
+    localStorage.removeItem(FREE_RESET_KEY);
+}
 
-// Allow Enter key to validate
-apiKeyInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        validateKeyBtn.click();
+let useFreeTrial = localStorage.getItem(FREE_ACTIVE_KEY) === 'true';
+if (freeRemaining <= 0) useFreeTrial = false;
+
+const updateFreeCounter = () => {
+    if (!freeCounter) return;
+    if (useFreeTrial && freeRemaining > 0) {
+        freeCounter.textContent = `Free searches left: ${freeRemaining}`;
+        freeCounter.classList.add('visible');
+    } else {
+        freeCounter.classList.remove('visible');
     }
-});
+};
+
+const updateEntryState = () => {
+    const provider = normalizeProvider(providerSelect?.value);
+    const storedKey = getStoredKey(provider);
+    const canEnter = (useFreeTrial && freeRemaining > 0) || Boolean(storedKey);
+    if (enterMuseumBtn) enterMuseumBtn.disabled = !canEnter;
+};
+
+const setStatus = (message, statusClass) => {
+    if (!apiStatus) return;
+    apiStatus.className = statusClass;
+    apiStatus.textContent = message;
+};
+
+const applyProvider = (provider) => {
+    const normalized = normalizeProvider(provider);
+    if (providerSelect) providerSelect.value = normalized;
+    localStorage.setItem(PROVIDER_KEY, normalized);
+    world.landmarkService?.setProvider(normalized);
+
+    const storedKey = getStoredKey(normalized);
+    if (apiKeyInput) apiKeyInput.value = storedKey;
+    world.landmarkService?.setApiKey(storedKey);
+
+    updateEntryState();
+};
+
+const storedProvider = normalizeProvider(localStorage.getItem(PROVIDER_KEY));
+applyProvider(storedProvider);
+
+world.landmarkService?.setFreeTrialState(useFreeTrial, freeRemaining);
+world.landmarkService?.setFreeTrialResetAt(freeResetAt);
+world.landmarkService.onFreeTrialChange = (remaining, resetAt) => {
+    freeRemaining = remaining;
+    localStorage.setItem(FREE_REMAINING_KEY, String(remaining));
+    if (Number.isFinite(resetAt)) {
+        freeResetAt = resetAt;
+        localStorage.setItem(FREE_RESET_KEY, String(resetAt));
+    }
+    if (freeRemaining <= 0) {
+        useFreeTrial = false;
+        localStorage.setItem(FREE_ACTIVE_KEY, 'false');
+        world.landmarkService?.setUseFreeTrial(false);
+        setStatus('Free trial used up. Add your own API key to continue.', 'error');
+    }
+    updateFreeCounter();
+    updateEntryState();
+};
+
+const showInitialStatus = () => {
+    const provider = normalizeProvider(providerSelect?.value);
+    const storedKey = getStoredKey(provider);
+    if (useFreeTrial && freeRemaining > 0) {
+        setStatus(`Free trial enabled (${freeRemaining} searches left)`, 'success');
+    } else if (storedKey) {
+        const label = PROVIDER_LABELS[provider] || 'OpenAI';
+        setStatus(`✓ ${label} API key loaded from storage`, 'success');
+    } else {
+        setStatus('Add your API key or try free search (3 total).', 'validating');
+    }
+};
+
+if (providerSelect) {
+    providerSelect.addEventListener('change', (event) => {
+        const nextProvider = normalizeProvider(event.target.value);
+        applyProvider(nextProvider);
+        showInitialStatus();
+    });
+}
+
+if (validateKeyBtn && apiKeyInput) {
+    validateKeyBtn.addEventListener('click', () => {
+        const provider = normalizeProvider(providerSelect?.value);
+        const apiKey = apiKeyInput.value.trim();
+        if (!apiKey) {
+            setStatus('✗ Please enter an API key', 'error');
+            updateEntryState();
+            return;
+        }
+
+        setStoredKey(provider, apiKey);
+        world.landmarkService?.setProvider(provider);
+        world.landmarkService?.setApiKey(apiKey);
+
+        useFreeTrial = false;
+        localStorage.setItem(FREE_ACTIVE_KEY, 'false');
+        world.landmarkService?.setUseFreeTrial(false);
+
+        const label = PROVIDER_LABELS[provider] || 'OpenAI';
+        setStatus(`✓ ${label} API key saved`, 'success');
+        updateFreeCounter();
+        updateEntryState();
+    });
+
+    apiKeyInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            validateKeyBtn.click();
+        }
+    });
+}
+
+if (freeTrialBtn) {
+    freeTrialBtn.addEventListener('click', () => {
+        if (freeRemaining <= 0) {
+            setStatus('Free trial already used up. Add your own API key.', 'error');
+            return;
+        }
+        useFreeTrial = true;
+        localStorage.setItem(FREE_ACTIVE_KEY, 'true');
+        world.landmarkService?.setUseFreeTrial(true);
+        setStatus(`Free trial enabled (${freeRemaining} searches left)`, 'success');
+        updateFreeCounter();
+        updateEntryState();
+    });
+}
+
+updateFreeCounter();
+updateEntryState();
+showInitialStatus();
 
 // Pointer Lock Logic
 const blocker = document.getElementById('blocker');

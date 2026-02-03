@@ -18,8 +18,7 @@ export class World {
         // Core Components
         this.landmarkService = new LandmarkService();
         this.uiManager = new UIManager(
-            this.onSearch.bind(this),
-            (key) => this.landmarkService.setApiKey(key)
+            this.onSearch.bind(this)
         );
         this.environment = new Environment(scene);
         
@@ -405,7 +404,7 @@ export class World {
         // If not locked, request lock
         if (!this.controls || !this.controls.enabled) {
             // Only allow locking if API key is set
-            if (this.landmarkService.apikey) {
+            if (this.landmarkService.apikey || this.landmarkService.useFreeTrial) {
                 this.uiManager.requestPointerLock();
             }
             return;
